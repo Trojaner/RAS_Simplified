@@ -1,3 +1,6 @@
+# Simplified RAS
+This fork removed flash attention support and triton fused kernels to simplify integration.  Added back support for Stable Diffusion 3.5 as well by backporting changes from diffusers.
+
 <p align="center">
     <br>
     <img src="https://github.com/microsoft/RAS/blob/main/docs/img/logo_ras.png" width="250"/>
@@ -135,8 +138,6 @@ bash Lumina_Next_T2I_example.sh
 ## Customize Hyperparameters
 **sample_ratio**: Average sample ratio for each RAS step. For instance, setting **sample_ratio** to 0.5 on a sequence of 4096 tokens will result in the noise of averagely 2048 tokens to be updated during each RAS step.
 
-**replace_with_flash_attn**: Setting this will replace the attention kernel from torch.nn.functional.scaled_dot_product_attention to flash-attn. Please follow the [official document](https://github.com/Dao-AILab/flash-attention) to install flash-attn first.
-
 **error_reset_steps**: The dense sampling steps inserted between the RAS steps to reset the accumulated error. Please use a string separated with commas for this parameter, such as "12,22".
 
 **metric**: The metric used for identifying the importance of regions during the sampling process. Currently support "l2norm" and "std".
@@ -148,8 +149,6 @@ bash Lumina_Next_T2I_example.sh
 **scheduler_start_step** and **scheduler_end_step**: set the range of sampling steps to apply RAS. The "scheduler_start_step" is recommended to be set to at least 4 to guarantee high generation quality.
 
 **skip_num_step** and **skip_num_step_length**: The two parameters are set to enable linear dynamic sample ratio. The number of sampled tokens for each step increase/decrease by **skip_num_step** every **skip_num_step_length** steps.
-
-**enable_index_fusion**: Whether to enable kernel fusion for higher generation speed. Please follow the [official document](https://wiki.tiker.net/PyCuda/Installation/) to install PyCuda first.
 
 ## Citation
 

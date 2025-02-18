@@ -5,14 +5,12 @@ class ras_manager:
         self.scheduler_end_step = 30
         self.metric = "std"
         self.error_reset_steps = [12, 22]
-        self.replace_with_flash_attn = False
         self.sample_ratio = 0.5
         self.starvation_scale = 0.1
         self.vae_size = 8
         self.high_ratio = 1
         self.num_steps = 30
         self.current_step = 0
-        self.enable_index_fusion = False
         self.is_RAS_step = False
         self.is_next_RAS_step = False
 
@@ -32,7 +30,6 @@ class ras_manager:
         self.scheduler_end_step = args.scheduler_end_step
         self.metric = args.metric
         self.error_reset_steps = [int(i.strip()) for i in args.error_reset_steps.split(",")]
-        self.replace_with_flash_attn = args.replace_with_flash_attn
         self.sample_ratio = args.sample_ratio
         self.num_steps = args.num_inference_steps
         self.skip_num_step = args.skip_num_step
@@ -40,7 +37,6 @@ class ras_manager:
         self.height = args.height
         self.weight = args.width
         self.high_ratio = args.high_ratio
-        self.enable_index_fusion = args.enable_index_fusion
         self.generate_skip_token_list()
 
 

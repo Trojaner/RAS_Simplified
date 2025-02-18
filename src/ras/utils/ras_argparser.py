@@ -8,7 +8,6 @@ def parse_args():
     parser.add_argument("--output", type=str, default="output.png", help="Output file path")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--sample_ratio", type=float, default=0.5, help="Average sample ratio during each step for RAS")
-    parser.add_argument("--replace_with_flash_attn", action="store_true", help="Replace the attention mechanism with flash attention")
     parser.add_argument("--error_reset_steps", type=str, default="12,22", help="Dense steps to reset the error, use comma to separate")
     parser.add_argument("--metric", type=str, default="std", choices=["std", "l2norm"], help="Metric to calculate the patch selection, currently support std and l2norm")
     parser.add_argument("--high_ratio", type=float, default=1, help="Based on the metric selected, the ratio of the high value chosen to be cached. Range from 0 to 1")
@@ -20,6 +19,5 @@ def parse_args():
     parser.add_argument("--patch_size", type=int, default=2, help="Patch size for Lumina")
     parser.add_argument("--skip_num_step", type=int, default=0, help="Parameter for dynamic skip token numbers. The skip token number increases/decreases by this value every skip_num_step_length steps. Can be negative or positive.")
     parser.add_argument("--skip_num_step_length", type=int, default=0, help="The interval to change the skip token number")
-    parser.add_argument("--enable_index_fusion", action="store_true", help="Enable index fusion for RAS")
 
     return parser.parse_args()

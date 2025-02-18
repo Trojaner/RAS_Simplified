@@ -55,36 +55,10 @@ class RASLuminaAttnProcessor2_0:
 
         batch_size, sequence_length, _ = hidden_states.shape
 
-        v_fuse_linear = ras_manager.MANAGER.sample_ratio < 1.0 and ras_manager.MANAGER.is_RAS_step and \
-            is_self_attention and self.v_cache is not None \
-            and ras_manager.MANAGER.enable_index_fusion
-        k_fuse_linear = v_fuse_linear and key_rotary_emb is None
-
         # Get Query-Key-Value Pair
         query = attn.to_q(hidden_states)
-
-        if v_fuse_linear:
-            from .fused_kernels_lumina import _partially_linear
-            _partially_linear(
-                encoder_hidden_states,
-                attn.to_v.weight,
-                attn.to_v.bias,
-                ras_manager.MANAGER.other_patchified_index,
-                self.v_cache.view(batch_size, self.v_cache.shape[1], -1)
-            )
-        else:
-            value = attn.to_v(encoder_hidden_states)
-
-        if k_fuse_linear:
-            _partially_linear(
-                encoder_hidden_states,
-                attn.to_k.weight,
-                attn.to_k.bias,
-                ras_manager.MANAGER.other_patchified_index,
-                self.k_cache.view(batch_size, self.k_cache.shape[1], -1)
-            )
-        else:
-            key = attn.to_k(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states)
+        key = attn.to_k(encoder_hidden_states)
 
         query_dim = query.shape[-1]
         inner_dim = key.shape[-1]
@@ -101,11 +75,8 @@ class RASLuminaAttnProcessor2_0:
             key = attn.norm_k(key)
 
         query = query.view(batch_size, -1, attn.heads, head_dim)
-
-        if not k_fuse_linear:
-            key = key.view(batch_size, -1, kv_heads, head_dim)
-        if not v_fuse_linear:
-            value = value.view(batch_size, -1, kv_heads, head_dim)
+        key = key.view(batch_size, -1, kv_heads, head_dim)
+        value = value.view(batch_size, -1, kv_heads, head_dim)
 
         if ras_manager.MANAGER.sample_ratio < 1.0 and ras_manager.MANAGER.current_step == 0 and is_self_attention:
             self.k_cache = None
@@ -123,16 +94,7 @@ class RASLuminaAttnProcessor2_0:
                 query = apply_rotary_emb(query, query_rotary_emb, use_real=False)
         if key_rotary_emb is not None:
             if ras_manager.MANAGER.sample_ratio < 1.0 and ras_manager.MANAGER.is_RAS_step:
-                if ras_manager.MANAGER.enable_index_fusion:
-                    from .fused_kernels_lumina import _partially_apply_rope
-                    _partially_apply_rope(
-                        key,
-                        ras_manager.MANAGER.image_rotary_emb_skip,
-                        ras_manager.MANAGER.other_patchified_index,
-                        self.k_cache,
-                    )
-                else:
-                    key = apply_rotary_emb(key, ras_manager.MANAGER.image_rotary_emb_skip, use_real=False)
+                key = apply_rotary_emb(key, ras_manager.MANAGER.image_rotary_emb_skip, use_real=False)
             else:
                 key = apply_rotary_emb(key, key_rotary_emb, use_real=False)
 
@@ -141,9 +103,8 @@ class RASLuminaAttnProcessor2_0:
             self.v_cache = value
 
         if ras_manager.MANAGER.sample_ratio < 1.0 and is_self_attention and ras_manager.MANAGER.is_RAS_step:
-            if not ras_manager.MANAGER.enable_index_fusion:
-                self.k_cache[:, ras_manager.MANAGER.other_patchified_index] = key
-                self.v_cache[:, ras_manager.MANAGER.other_patchified_index] = value
+            self.k_cache[:, ras_manager.MANAGER.other_patchified_index] = key
+            self.v_cache[:, ras_manager.MANAGER.other_patchified_index] = value
             key = self.k_cache
             value = self.v_cache
 
@@ -166,11 +127,10 @@ class RASLuminaAttnProcessor2_0:
                 softmax_scale = attn.scale
 
         # perform Grouped-qurey Attention (GQA)   # TODO replace with GQA
-        if (not ras_manager.MANAGER.replace_with_flash_attn) or (not is_self_attention):
-            n_rep = attn.heads // kv_heads
-            if n_rep >= 1:
-                key = key.unsqueeze(3).repeat(1, 1, 1, n_rep, 1).flatten(2, 3)
-                value = value.unsqueeze(3).repeat(1, 1, 1, n_rep, 1).flatten(2, 3)
+        n_rep = attn.heads // kv_heads
+        if n_rep >= 1:
+            key = key.unsqueeze(3).repeat(1, 1, 1, n_rep, 1).flatten(2, 3)
+            value = value.unsqueeze(3).repeat(1, 1, 1, n_rep, 1).flatten(2, 3)
 
         # scaled_dot_product_attention expects attention_mask shape to be
         # (batch, heads, source_length, target_length)
@@ -180,23 +140,13 @@ class RASLuminaAttnProcessor2_0:
         else:
             attention_mask = attention_mask.expand(-1, attn.heads, sequence_length, -1)
 
-
-        if (not ras_manager.MANAGER.replace_with_flash_attn) or (not is_self_attention):
-        # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        # TODO: add support for attn.scale when we move to Torch 2.1
-            query = query.transpose(1, 2)
-            key = key.transpose(1, 2)
-            value = value.transpose(1, 2)
-            hidden_states = F.scaled_dot_product_attention(
-                query, key, value, attn_mask=attention_mask, scale=softmax_scale
-            )
-            hidden_states = hidden_states.transpose(1, 2).to(dtype)
-        else:
-            from flash_attn import flash_attn_func
-            hidden_states = flash_attn_func(
-                query, key, value, softmax_scale=softmax_scale
-            )
-            hidden_states = hidden_states.to(dtype)
+        query = query.transpose(1, 2)
+        key = key.transpose(1, 2)
+        value = value.transpose(1, 2)
+        hidden_states = F.scaled_dot_product_attention(
+            query, key, value, attn_mask=attention_mask, scale=softmax_scale
+        )
+        hidden_states = hidden_states.transpose(1, 2).to(dtype)
         return hidden_states
 
 
@@ -225,34 +175,15 @@ class RASJointAttnProcessor2_0:
 
         # `sample` projections.
         query = attn.to_q(hidden_states)
+        key = attn.to_k(hidden_states)
+        value = attn.to_v(hidden_states)
 
-        k_fuse_linear = ras_manager.MANAGER.sample_ratio < 1.0 and ras_manager.MANAGER.is_RAS_step and \
-            self.k_cache is not None and ras_manager.MANAGER.enable_index_fusion
-        v_fuse_linear = k_fuse_linear
+        inner_dim = key.shape[-1]
+        head_dim = inner_dim // attn.heads
 
-        if k_fuse_linear:
-            from .fused_kernels_sd3 import _partially_linear
-            _partially_linear(
-                hidden_states,
-                attn.to_k.weight,
-                attn.to_k.bias,
-                ras_manager.MANAGER.other_patchified_index,
-                self.k_cache.view(batch_size, self.k_cache.shape[1], -1)
-            )
-        else:
-            key = attn.to_k(hidden_states)
-        if v_fuse_linear:
-            _partially_linear(
-                hidden_states,
-                attn.to_v.weight,
-                attn.to_v.bias,
-                ras_manager.MANAGER.other_patchified_index,
-                self.v_cache.view(batch_size, self.v_cache.shape[1], -1)
-            )
-        else:
-            value = attn.to_v(hidden_states)
-
-        
+        query = query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        key = key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
         if attn.norm_q is not None:
             query = attn.norm_q(query)
@@ -268,9 +199,8 @@ class RASJointAttnProcessor2_0:
             self.v_cache = value
 
         if ras_manager.MANAGER.sample_ratio < 1.0 and ras_manager.MANAGER.is_RAS_step:
-            if not ras_manager.MANAGER.enable_index_fusion:
-                self.k_cache[:, ras_manager.MANAGER.other_patchified_index] = key
-                self.v_cache[:, ras_manager.MANAGER.other_patchified_index] = value
+            self.k_cache[:, :, ras_manager.MANAGER.other_patchified_index] = key
+            self.v_cache[:, :, ras_manager.MANAGER.other_patchified_index] = value
             key = self.k_cache
             value = self.v_cache
 
@@ -278,52 +208,34 @@ class RASJointAttnProcessor2_0:
             self.k_cache = None
             self.v_cache = None
 
-        inner_dim = key.shape[-1]
-        head_dim = inner_dim // attn.heads
-
         # `context` projections.
         if encoder_hidden_states is not None:
             encoder_hidden_states_query_proj = attn.add_q_proj(encoder_hidden_states)
             encoder_hidden_states_key_proj = attn.add_k_proj(encoder_hidden_states)
             encoder_hidden_states_value_proj = attn.add_v_proj(encoder_hidden_states)
 
-            # encoder_hidden_states_query_proj = encoder_hidden_states_query_proj.view(
-            #     batch_size, -1, attn.heads, head_dim
-            # ).transpose(1, 2)
-            # encoder_hidden_states_key_proj = encoder_hidden_states_key_proj.view(
-            #     batch_size, -1, attn.heads, head_dim
-            # ).transpose(1, 2)
-            # encoder_hidden_states_value_proj = encoder_hidden_states_value_proj.view(
-            #     batch_size, -1, attn.heads, head_dim
-            # ).transpose(1, 2)
+            encoder_hidden_states_query_proj = encoder_hidden_states_query_proj.view(
+                batch_size, -1, attn.heads, head_dim
+            ).transpose(1, 2)
+            encoder_hidden_states_key_proj = encoder_hidden_states_key_proj.view(
+                batch_size, -1, attn.heads, head_dim
+            ).transpose(1, 2)
+            encoder_hidden_states_value_proj = encoder_hidden_states_value_proj.view(
+                batch_size, -1, attn.heads, head_dim
+            ).transpose(1, 2)
 
-            # TODO: check norm_added for q and k
             if attn.norm_added_q is not None:
                 encoder_hidden_states_query_proj = attn.norm_added_q(encoder_hidden_states_query_proj)
             if attn.norm_added_k is not None:
                 encoder_hidden_states_key_proj = attn.norm_added_k(encoder_hidden_states_key_proj)
 
-            query = torch.cat([query, encoder_hidden_states_query_proj], dim=1)
-            key = torch.cat([key, encoder_hidden_states_key_proj], dim=1)
-            value = torch.cat([value, encoder_hidden_states_value_proj], dim=1)
+            query = torch.cat([query, encoder_hidden_states_query_proj], dim=2)
+            key = torch.cat([key, encoder_hidden_states_key_proj], dim=2)
+            value = torch.cat([value, encoder_hidden_states_value_proj], dim=2)
 
-        if not ras_manager.MANAGER.replace_with_flash_attn:
-            query = query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-            key = key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-            value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-            hidden_states = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False)
-            hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
-            hidden_states = hidden_states.to(query.dtype)
-        else:
-            from flash_attn import flash_attn_func
-            query = query.view(batch_size, -1, attn.heads, head_dim)
-            key = key.view(batch_size, -1, attn.heads, head_dim)
-            value = value.view(batch_size, -1, attn.heads, head_dim)
-            hidden_states = flash_attn_func(
-                query, key, value, dropout_p=0.0, causal=False
-            )
-            hidden_states = hidden_states.view(batch_size, -1, attn.heads * head_dim)
-            hidden_states = hidden_states.to(query.dtype)
+        hidden_states = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False)
+        hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
+        hidden_states = hidden_states.to(query.dtype)
 
         if encoder_hidden_states is not None:
             # Split the attention outputs.
