@@ -55,7 +55,7 @@ pip install flash-attn --no-build-isolation
 
 Implementing RAS on [Diffusers](https://github.com/huggingface/diffusers) is easy. Here we provide two simple examples of RAS with the two models in our research paper. You can also modify the scripts for other usage.
 
-**Stable Diffusion 3**
+**Stable Diffusion 3 / 3.5**
 
 ```python
 import argparse
@@ -66,7 +66,7 @@ from ras.utils import ras_manager
 from ras.utils.RAS_argparser import parse_args
 
 def sd3_inf(args):
-    pipeline = StableDiffusion3Pipeline.from_pretrained("stabilityai/stable-diffusion-3-medium-diffusers", torch_dtype=torch.float16, use_auth_token=True)
+    pipeline = StableDiffusion3Pipeline.from_pretrained("stabilityai/stable-diffusion-3-medium-diffusers", torch_dtype=torch.float16, use_auth_token=True) # you can also use stable diffusion 3.5 weights instead
     pipeline.to("cuda")
     pipeline = update_sd3_pipeline(pipeline)
     generator = torch.Generator("cuda").manual_seed(args.seed) if args.seed is not None else None
@@ -91,6 +91,7 @@ if __name__ == "__main__":
 ```bash
 cd scripts
 bash Stable_Diffusion_3_example.sh
+# or: bash Stable_Diffusion_3_5_example.sh
 ```
 
 **Lumina Next T2I**
