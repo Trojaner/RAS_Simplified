@@ -1,5 +1,5 @@
 # Simplified RAS
-This fork removed flash attention support and triton fused kernels to simplify integration.  
+This fork removed flash attention support and triton fused kernels to simplify integration and lower requirements.  
 Added back support for Stable Diffusion 3.5 as well by backporting changes from diffusers.
 
 <p align="center">
